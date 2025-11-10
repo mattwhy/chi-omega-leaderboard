@@ -1,0 +1,74 @@
+name: Capture 8:30 PM Snapshot
+
+on:
+  schedule:
+    # Run at 1:30 AM UTC on November 11 (= 8:30 PM ET on November 10)
+    # DST ends Nov 2, 2025, so ET = UTC-5
+    - cron: '30 1 11 11 *'
+  
+  # Allow manual trigger for testing
+  workflow_dispatch:
+
+jobs:
+  capture-snapshot:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Fetch team data from Blackbaud API
+        run: |
+          echo "Fetching team data at $(date)"
+          
+          # Fetch team data using public API
+          curl -s "https://secure2.wish.org/site/CRTeamraiserAPI?method=getTeamsByInfo&api_key=mu3fefod&v=1.0&response_format=json&fr_id=6697&team_company_id=11960" > raw_data.json
+          
+          echo "Raw API response:"
+          cat raw_data.json
+          
+          # Process the data into the format expected by the leaderboard
+          node -e "
+          const fs = require('fs');
+          const rawData = JSON.parse(fs.readFileSync('raw_data.json', 'utf8'));
+          
+          // Extract teams array
+          const teamsData = rawData.getTeamSearchByInfoResponse?.team;
+          if (!teamsData) {
+            console.error('No teams found');
+            process.exit(1);
+          }
+          
+          // Handle both single team (object) and multiple teams (array)
+          const teamsArray = Array.isArray(teamsData) ? teamsData : [teamsData];
+          
+          // Process each team
+          const teams = teamsArray.map(teamData => ({
+            teamId: teamData.id,
+            teamName: teamData.name || \`Team \${teamData.id}\`,
+            total: parseFloat(teamData.amountRaised || 0) / 100,
+            numMembers: parseInt(teamData.numMembers || 0)
+          }));
+          
+          // Sort by total (descending)
+          teams.sort((a, b) => b.total - a.total);
+          
+          // Save processed data
+          fs.writeFileSync('snapshots/2025-11-10.json', JSON.stringify(teams, null, 2));
+          console.log('Snapshot saved with', teams.length, 'teams');
+          "
+      
+      - name: Commit snapshot to repository
+        run: |
+          git config user.name "GitHub Actions Bot"
+          git config user.email "actions@github.com"
+          git add snapshots/2025-11-10.json
+          git diff --staged --quiet || git commit -m "Capture 8:30 PM ET snapshot on $(date)"
+          git push
+      
+      - name: Display snapshot summary
+        run: |
+          echo "=== Snapshot Captured ==="
+          cat snapshots/2025-11-10.json
