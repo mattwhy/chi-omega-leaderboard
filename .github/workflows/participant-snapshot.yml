@@ -63,6 +63,13 @@ jobs:
             
             for (const member of membersArray) {
               const consId = member.consId;
+              
+              // Skip participant 11258541 - exclude from leaderboard
+              if (consId === '11258541') {
+                console.log('SKIP: Excluding participant ' + consId + ' from leaderboard');
+                continue;
+              }
+              
               const firstName = member.name?.first || '';
               const lastName = member.name?.last || '';
               const fullName = `${firstName} ${lastName}`.trim() || `Participant ${consId}`;
@@ -84,18 +91,16 @@ jobs:
                 }
                 
                 const total = parseFloat(progress.raised || 0) / 100;
-                const numDonations = parseInt(progress.gifts || 0);
                 const goalAmount = parseFloat(progress.goal || 0) / 100;
                 
                 participants.push({
                   consId: consId,
                   name: fullName,
                   total: total,
-                  numDonations: numDonations,
                   goalAmount: goalAmount
                 });
                 
-                console.log(`SUCCESS: ${fullName}: $${total} (${numDonations} donations)`);
+                console.log(`SUCCESS: ${fullName}: $${total}`);
                 
               } catch (err) {
                 console.warn(`Exception for ${fullName}:`, err.message);
