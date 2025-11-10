@@ -1,0 +1,128 @@
+name: Capture Participant Snapshot
+
+on:
+  schedule:
+    # Run at 8:30 PM ET (1:30 AM UTC on Nov 11, after DST ends Nov 2)
+    - cron: '30 1 11 11 *'
+  
+  # Allow manual trigger for testing
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  capture-snapshot:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Fetch participant data from Blackbaud API
+        run: |
+          # Step 1: Get team members (participant IDs and names)
+          curl "https://secure2.wish.org/site/CRTeamraiserAPI?method=getTeamMembers&api_key=mu3fefod&v=1.0&response_format=json&fr_id=6697&team_id=56029" \
+            -o team_members.json
+          
+          echo "Team members response:"
+          cat team_members.json
+      
+      - name: Process participant data
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const https = require('https');
+            
+            // Step 1: Read team members
+            const membersData = JSON.parse(fs.readFileSync('team_members.json', 'utf8'));
+            console.log('Team members response:', JSON.stringify(membersData, null, 2));
+            
+            const teamMembers = membersData.getTeamMembersResponse?.member;
+            if (!teamMembers) {
+              throw new Error('No team members found in API response');
+            }
+            
+            const membersArray = Array.isArray(teamMembers) ? teamMembers : [teamMembers];
+            console.log(`Found ${membersArray.length} team members`);
+            
+            // Step 2: Fetch progress for each member
+            async function fetchProgress(consId) {
+              return new Promise((resolve, reject) => {
+                const url = `https://secure2.wish.org/site/CRTeamraiserAPI?method=getParticipantProgress&api_key=mu3fefod&v=1.0&response_format=json&fr_id=6697&cons_id=${consId}`;
+                https.get(url, (res) => {
+                  let data = '';
+                  res.on('data', chunk => data += chunk);
+                  res.on('end', () => resolve(JSON.parse(data)));
+                }).on('error', reject);
+              });
+            }
+            
+            const participants = [];
+            
+            for (const member of membersArray) {
+              const consId = member.consId;
+              const firstName = member.name?.first || '';
+              const lastName = member.name?.last || '';
+              const fullName = `${firstName} ${lastName}`.trim() || `Participant ${consId}`;
+              
+              console.log(`Fetching progress for ${fullName} (${consId})...`);
+              
+              try {
+                const progressData = await fetchProgress(consId);
+                
+                if (progressData.errorResponse) {
+                  console.warn(`Error for ${fullName}:`, progressData.errorResponse.message);
+                  continue;
+                }
+                
+                const progress = progressData.getParticipantProgressResponse?.personalProgress;
+                if (!progress) {
+                  console.warn(`No progress data for ${fullName}`);
+                  continue;
+                }
+                
+                const total = parseFloat(progress.raised || 0) / 100;
+                const numDonations = parseInt(progress.gifts || 0);
+                const goalAmount = parseFloat(progress.goal || 0) / 100;
+                
+                participants.push({
+                  consId: consId,
+                  name: fullName,
+                  total: total,
+                  numDonations: numDonations,
+                  goalAmount: goalAmount
+                });
+                
+                console.log(`SUCCESS: ${fullName}: $${total} (${numDonations} donations)`);
+                
+              } catch (err) {
+                console.warn(`Exception for ${fullName}:`, err.message);
+              }
+            }
+            
+            if (participants.length === 0) {
+              throw new Error('No participant data could be retrieved');
+            }
+            
+            // Sort by total raised (descending)
+            participants.sort((a, b) => b.total - a.total);
+            
+            console.log('Processed participants:', JSON.stringify(participants, null, 2));
+            
+            // Save to snapshot file
+            fs.writeFileSync(
+              'snapshots/participants-2025-11-10.json',
+              JSON.stringify(participants, null, 2)
+            );
+            
+            console.log(`Snapshot saved with ${participants.length} participants`);
+      
+      - name: Commit and push snapshot
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          git add snapshots/participants-2025-11-10.json
+          git commit -m "Capture participant snapshot at $(date -u '+%Y-%m-%d %H:%M:%S UTC')" || echo "No changes to commit"
+          git push
