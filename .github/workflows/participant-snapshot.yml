@@ -59,6 +59,33 @@ jobs:
               });
             }
             
+            // Step 3: Fetch participant photo
+            async function fetchPhoto(consId) {
+              return new Promise((resolve, reject) => {
+                const postData = `method=getPersonalPhotos&api_key=mu3fefod&v=1.0&response_format=json&fr_id=6697&cons_id=${consId}`;
+                
+                const options = {
+                  hostname: 'secure2.wish.org',
+                  path: '/site/CRTeamraiserAPI',
+                  method: 'POST',
+                  headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                    'Content-Length': postData.length
+                  }
+                };
+                
+                const req = https.request(options, (res) => {
+                  let data = '';
+                  res.on('data', chunk => data += chunk);
+                  res.on('end', () => resolve(JSON.parse(data)));
+                });
+                
+                req.on('error', reject);
+                req.write(postData);
+                req.end();
+              });
+            }
+            
             const participants = [];
             
             for (const member of membersArray) {
@@ -93,11 +120,36 @@ jobs:
                 const total = parseFloat(progress.raised || 0) / 100;
                 const goalAmount = parseFloat(progress.goal || 0) / 100;
                 
+                // Fetch participant photo
+                let photoUrl = null;
+                try {
+                  const photoData = await fetchPhoto(consId);
+                  const photoItem = photoData.getPersonalPhotosResponse?.photoItem;
+                  
+                  if (photoItem) {
+                    const firstPhoto = Array.isArray(photoItem) ? photoItem[0] : photoItem;
+                    // Prefer thumbnailUrl if present, otherwise fall back to customUrl
+                    const candidate = firstPhoto?.thumbnailUrl || firstPhoto?.customUrl;
+                    if (candidate) {
+                      // Normalize the returned URL to an absolute URL
+                      let path = String(candidate || '').trim();
+                      // Remove any leading ../ or ./ or leading slash
+                      path = path.replace(/^\.\.?\//, '');
+                      path = path.replace(/^\//, '');
+                      photoUrl = 'https://secure2.wish.org/' + path;
+                      console.log(`Photo found for ${fullName}: ${photoUrl}`);
+                    }
+                  }
+                } catch (photoErr) {
+                  console.warn(`Could not fetch photo for ${fullName}:`, photoErr.message);
+                }
+                
                 participants.push({
                   consId: consId,
                   name: fullName,
                   total: total,
-                  goalAmount: goalAmount
+                  goalAmount: goalAmount,
+                  photoUrl: photoUrl
                 });
                 
                 console.log(`SUCCESS: ${fullName}: $${total}`);
